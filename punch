@@ -5,6 +5,7 @@ DATE_FMT="+%Y-%m-%d"
 CURRENT_DAY_NB=$(( $(date '+%u') -1 ))
 
 THIS_USER=$(git config user.name)
+THIS_PASSWORD=""
 
 REPOS=$(cat $(git rev-parse --show-toplevel)/repo.track)
 
@@ -96,8 +97,8 @@ get_commits_for_repo()
 {
     curent_dir=${PWD}
     cd ${repo}
-    echo -e "\nCommits for $(git remote -v | grep push | cut -d ' ' -f1 | cut -d ':' -f 2)"
-    git log --pretty='format:%h %d %s [%cn]' --decorate --after="$2 0:00" --before="$3 23:59" | grep "${THIS_USER}"
+    echo -e "\nCommits for $(git remote -v | grep fetch | cut -d ' ' -f1 | cut -d ':' -f 2 | cut -d '.' -f1)"
+    git log --pretty='format:%h %d %s [%cn]' --decorate --after="$2 0:00" --before="$3 23:59" --author="${THIS_USER}" | echo
     cd ${curent_dir}
 }
 
@@ -115,6 +116,40 @@ get_commits_for_day()
     fi
 }
 
+query_github_pr() {
+
+    DIR=$1
+    GITHUB_REPO=$(git remote -v | grep fetch | cut -d ' ' -f1 | cut -d ':' -f2 | cut -d '.' -f1 )
+
+    IS_GITHUB=$(git remote -v | grep github)
+    [ "_" == "_${IS_GITHUB}" ] && return 1
+
+    if [ $( ping -c 1 "github.com" | grep icmp* | wc -l ) -ne 0 ]
+    then
+
+        curent_dir=${PWD}
+        cd ${DIR}
+
+        echo -e "\nClosed PR"
+        RESULT=$(curl -sLi -u "${THIS_USER}:${THIS_PASSWORD}" -H "Accept: application/json" -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${GITHUB_REPO}/pulls?state=closed" \
+            | grep "\"label\": \"${THIS_USER}:.*\"," | cut -d':' -f3 | cut -d'"' -f1)
+        [ "_${RESULT}" == "_" ] && echo "NONE" || ${RESULT}
+
+        echo -e "\nOpen PR"
+        RESULT=$(curl -sLi -u "${THIS_USER}:${THIS_PASSWORD}" -H "Accept: application/json" -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${GITHUB_REPO}/pulls?state=open" \
+            | grep "\"label\": \"${THIS_USER}:.*\"," | cut -d':' -f3 | cut -d'"' -f1)
+
+        [ "_${RESULT}" == "_" ] && echo "NONE" || ${RESULT}
+
+        cd ${curent_dir}
+
+    fi
+
+
+}
+
 get_commits_for_week()
 {
     if [ "_${TRACK}" != "_" ]
@@ -126,6 +161,7 @@ get_commits_for_week()
         for repo in ${REPOS}
         do
             get_commits_for_repo ${repo} ${monday} ${last}
+            query_github_pr ${repo}
         done
     fi
 }
@@ -138,11 +174,17 @@ case $1 in
         git commit --allow-empty -m "Punch Out"
     ;;
     get_day)
+        echo "Enter github user \"${THIS_USER}\" password to access pull requests via HTTP GET"
+        read -s THIS_PASSWORD
+
         print_header        
         get_punch_for_day ${CURRENT_DAY_NB}
         get_commits_for_day ${CURRENT_DAY_NB}
     ;;
     get_week)
+        echo "Enter github user \"${THIS_USER}\" password to access pull requests via HTTP GET"
+        read -s THIS_PASSWORD
+
         print_header        
         get_punch_for_week
         get_commits_for_week ${CURRENT_DAY_NB}
