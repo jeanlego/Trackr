@@ -1,2 +1,7 @@
-/workspace/DMM_WI_2019/ 
-/workspace/vtr-verilog-to-routing/ 
+########################################
+# this is a comment
+% this is also a comment
+# Usage: insert /absolute/path/to/github/repo 
+#
+# NB: one per line
+#######################################
