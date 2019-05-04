@@ -1,0 +1,221 @@
+#!/bin/bash
+
+DATE_FMT="+%Y-%m-%d"
+
+CURRENT_DAY_NB=$(( $(date '+%u') -1 ))
+
+THIS_ROOT_DIR=$(git rev-parse --show-toplevel)
+passwd_file="${THIS_ROOT_DIR}/.passwd"
+
+THIS_USER=$(git config user.name)
+THIS_PASSWORD=""
+
+if [ -f ${passwd_file} ]
+then
+
+    THIS_USER=$(cat ${passwd_file} | head -n 1)
+    THIS_PASSWORD=$(cat ${passwd_file} | head -n +2 | tail -n 1 )
+fi
+
+REPOS="${THIS_ROOT_DIR}/.track"
+
+TRACK=0
+if [ -f ${REPOS} ]
+then
+    TRACK=1
+fi
+
+_s="\t"
+
+print_it() {
+    printf "$1${_s}$2${_s}$3${_s}$4${_s}$5\n"
+}
+
+print_header() {
+    print_it "day" "date" "in" "out" "total"
+}
+
+datediff() {
+    h1=$(( $(echo $1 | cut -d":" -f1) * 3600 ))
+    m1=$(( $(echo $1 | cut -d":" -f2) * 60 ))
+    s1=$(( $(echo $1 | cut -d":" -f3) ))
+
+    t1=$(( ( ${h1} ) + ( ${m1} ) + ( ${s1} ) )) 
+
+    h2=$(( $(echo $2 | cut -d":" -f1) * 3600 ))
+    m2=$(( $(echo $2 | cut -d":" -f2) * 60 ))
+    s2=$(( $(echo $2 | cut -d":" -f3) ))
+
+    t2=$(( ( ${h2} ) + ( ${m2} ) + ( ${s2} ) )) 
+
+    DIFF=$(( ${t2} - ${t1} ))
+
+    HOURS=$(( ${DIFF} / 3600 ))
+    MINUTE=$(( ( ${DIFF} / 60 ) % 60 ))
+    SECONDS=$(( ${DIFF} % 60 ))
+
+    echo "${HOURS}:${MINUTE}:${SECONDS}"
+}
+
+get_commits_for()
+{
+    git log --oneline --pretty='format:%ad %s' --decorate --after="$1 0:00" --before="$2 23:59" --author "${THIS_USER}"
+}
+
+get_punch_in_time()
+{
+    get_commits_for $1 $1 | grep "Punch In" | tail -n 1
+}
+
+get_punch_out_time()
+{
+    get_commits_for $1 $1 | grep "Punch Out" | head -n 1
+}
+
+get_punch_for_day()
+{
+    day_nb=$1
+    that_day=$(date -d"monday+${day_nb} days" ${DATE_FMT})
+    that_day_ltr=$(date -d"${that_day}" +%A)
+
+    PUNCH_IN_TIME=$(get_punch_in_time ${that_day} | cut -d ' ' -f 4)
+    PUNCH_OUT_TIME=$(get_punch_out_time ${that_day} | cut -d ' ' -f 4)
+    TOTAL_TIME="n/a"
+
+    if [ "_${PUNCH_IN_TIME}" == "_" ] || [ "_${PUNCH_OUT_TIME}" == "_" ]
+    then
+        PUNCH_IN_TIME="n/a"
+        PUNCH_OUT_TIME="n/a"
+    else
+        TOTAL_TIME=$(datediff ${PUNCH_IN_TIME} ${PUNCH_OUT_TIME})
+    fi
+    
+    print_it ${that_day_ltr} ${that_day} ${PUNCH_IN_TIME} ${PUNCH_OUT_TIME} ${TOTAL_TIME}
+
+}
+
+get_punch_for_week()
+{
+    for days in {0..6}
+    do
+        get_punch_for_day ${days}
+    done
+}
+
+
+get_commits_for_repo()
+{
+    curent_dir=${PWD}
+    cd ${repo}
+    echo -e "\nCommits for $(git remote -v | grep fetch | cut -d ' ' -f1 | cut -d ':' -f 2 | cut -d '.' -f1)"
+    git log --pretty='format:%h %d %s [%cn]' --decorate --after="$2 0:00" --before="$3 23:59" --author="${THIS_USER}" | echo
+    cd ${curent_dir}
+}
+
+get_commits_for_day()
+{
+    if [ "_${TRACK}" != "_" ]
+    then
+        day_nb=$1
+        that_day=$(date -d"monday+${day_nb} days" ${DATE_FMT})
+
+        while read -r repo 
+        do
+            if [[ $repo =~ ^# ]] \
+            || [[ $repo =~ ^% ]]
+            then
+                printf ""
+            else
+                get_commits_for_repo ${repo} ${that_day} ${that_day}
+            fi
+        done < <(grep "" ${REPOS})
+    fi
+}
+
+query_github_pr() {
+
+    DIR=$1
+    curent_dir=${PWD}
+    cd ${DIR}
+
+    GITHUB_REPO=$(git remote -v | grep fetch | cut -d ' ' -f1 | cut -d ':' -f2 | cut -d '.' -f1 )
+    IS_GITHUB=$(git remote -v | grep github)
+    if [ "_" != "_${IS_GITHUB}" ]
+    then
+        if [ $( ping -c 1 "github.com" | grep icmp* | wc -l ) -ne 0 ]
+        then
+
+            echo -e "\nClosed PR"
+            RESULT=$(curl -sLi -u "${THIS_USER}:${THIS_PASSWORD}" -H "Accept: application/json" -H "Content-Type: application/json" \
+                "https://api.github.com/repos/${GITHUB_REPO}/pulls?state=closed" \
+                | grep "\"label\": \"${THIS_USER}:.*\"," | cut -d':' -f3 | cut -d'"' -f1)
+            [ "_${RESULT}" == "_" ] && echo "NONE" || echo ${RESULT}
+
+            echo -e "\nOpen PR"
+            RESULT=$(curl -sLi -u "${THIS_USER}:${THIS_PASSWORD}" -H "Accept: application/json" -H "Content-Type: application/json" \
+                "https://api.github.com/repos/${GITHUB_REPO}/pulls?state=open" \
+                | grep "\"label\": \"${THIS_USER}:.*\"," | cut -d':' -f3 | cut -d'"' -f1)
+
+            [ "_${RESULT}" == "_" ] && echo "NONE" || echo ${RESULT}
+
+        fi
+    fi
+    cd ${curent_dir}
+
+
+}
+
+get_commits_for_week()
+{
+    if [ "_${TRACK}" != "_" ]
+    then
+        day_nb=$1
+        monday=$(date -d"monday+0 days" ${DATE_FMT})
+        last=$(date -d"monday+6 days" ${DATE_FMT})
+
+        while read -r repo 
+        do
+            if [[ $repo =~ ^# ]] \
+            || [[ $repo =~ ^% ]]
+            then
+                printf ""
+            else
+                get_commits_for_repo ${repo} ${monday} ${last}
+                query_github_pr ${repo}
+            fi
+        done < <(grep "" ${REPOS})
+    fi
+}
+
+case $1 in
+    in)
+        git commit --allow-empty -m "Punch In"
+    ;;
+    out)
+        git commit --allow-empty -m "Punch Out"
+    ;;
+    get_day)
+        if [ "_${THIS_PASSWORD}" == "_" ]
+        then
+            echo "Enter github user \"${THIS_USER}\" password to access pull requests via HTTP GET"
+            read -s THIS_PASSWORD
+        fi
+
+        print_header        
+        get_punch_for_day ${CURRENT_DAY_NB}
+        get_commits_for_day ${CURRENT_DAY_NB}
+    ;;
+    get_week)
+        if [ "_${THIS_PASSWORD}" == "_" ]
+        then
+            echo "Enter github user \"${THIS_USER}\" password to access pull requests via HTTP GET"
+            read -s THIS_PASSWORD
+        fi
+
+        print_header        
+        get_punch_for_week
+        get_commits_for_week ${CURRENT_DAY_NB}
+    ;;
+    *)
+    ;;
+esac
